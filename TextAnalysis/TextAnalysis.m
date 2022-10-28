@@ -13,7 +13,7 @@ classdef TextAnalysis
             obj.Property1 = inputArg1 + inputArg2;
         end
         
-        function documents = preprocessText(textData)
+        function documents = preprocess(textData)
             % Tokenize the text.
             documents = tokenizedDocument(textData);
             
@@ -23,6 +23,8 @@ classdef TextAnalysis
             % Erase punctuation.
             documents = erasePunctuation(documents);
         end
+
+
 
     end
 end
