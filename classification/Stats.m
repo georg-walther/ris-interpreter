@@ -1,17 +1,9 @@
-classdef Statistics
+classdef Stats
     %STATISTICS Summary of this class goes here
     %   Detailed explanation goes here
     
-    properties
-    end
-    
-    methods
-        function obj = Statistics(data)
-            %STATISTICS Construct an instance of this class
-            %   Detailed explanation goes here
-        end
-        
-        function plotLabelDistribution(obj,data)
+    methods(Static)       
+        function plotLabelDistribution(data)
             label = categorical(data.Label);
             figure;
             histogram(label);
@@ -20,7 +12,7 @@ classdef Statistics
             title("Class Distribution");
         end
 
-        function plotDocLength(obj,documents)
+        function plotDocLength(documents)
             documentLengths = doclength(documents);
             figure
             histogram(documentLengths)
