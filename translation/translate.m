@@ -9,7 +9,7 @@ function outText = translate(inText)
         status = system(cmd{1});
     end
 
-    path = append('.',filesep,'translate.py');
+    path = append('.',filesep,'translation',filesep,'translate.py');
     inText = strrep(inText,"`","'");
     inText = char(inText);
     seqLength = strlength(inText);

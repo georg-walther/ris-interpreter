@@ -4,7 +4,7 @@ classdef Stats
     
     methods(Static)       
         function plotLabelDistribution(data)
-            label = categorical(data.Label);
+            label = categorical(data.Y);
             figure;
             histogram(label);
             xlabel("Class");

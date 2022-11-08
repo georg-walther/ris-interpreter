@@ -13,7 +13,7 @@ classdef ClassificationBERT < Classification
                 toEnglish = true;
             end
             if toEnglish
-                path = append('.',filesep,'Data',filesep,'translatedTable.csv');
+                path = append('.',filesep,'data',filesep,'translatedTable.csv');
                 if isfile(path)
                     txtArray = readmatrix(path,delimitedTextImportOptions('Delimiter',',','VariableTypes','string'));
                     disp('Loaded ' + string(path) + ' as translation.');

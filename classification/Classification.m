@@ -113,27 +113,87 @@ classdef Classification
             idxBestFeatures = idx(1:optNumFeatures);
         end
 
-        function model = train(obj,features,labels)
+        function [model,decisionThresh] = train(obj,features,labels,targetClass,targetMetric,targetValue)
+            if nargin < 4
+                targetClass = [];
+                targetMetric = [];
+                targetValue = [];
+            elseif nargin < 5
+                error('Either specify no target parameter or all.');
+            elseif nargin < 6
+                error('Either specify no target parameter or all.');
+            else
+                targetClass = string(targetClass);
+                targetMetric = string(targetMetric);
+                targetValue = double(targetValue);
+            end
+
             disp("Training classifier with hyperparameter optimization ...");
-            % rng(5); % For reproducibility
-            cvp = cvpartition(labels,'KFold',5,'Stratify',true);
-            t = templateTree('Reproducible',true);
             if issparse(features)
                 features = full(features); % matlabs hyperparameter optimizations bugs with sparse matrices
             end
-            model = fitcensemble(features,labels,'OptimizeHyperparameters','auto','Learners',t, ...
-                                 'HyperparameterOptimizationOptions',struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus'));
+            maxEvals = 10;
+            cvp = cvpartition(labels,'KFold',5,'Stratify',true);
+            classes = unique(labels);
+            numClasses = length(classes);
+            if  numClasses < 3
+                disp('Identified as 2 (or 1) class classification.');
+                svm = fitcsvm(features,labels, ...
+                    'OptimizeHyperparameters','all','HyperparameterOptimizationOptions', ...
+                    struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus', ...
+                    'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
+                svmPost = fitPosterior(svm);
+            else
+                disp('Identified as multi-class classification.');
+                [svmPost,~] = fitcecoc(features,labels,'Learners','svm','FitPosterior',true, ...
+                    'OptimizeHyperparameters','all','HyperparameterOptimizationOptions', ...
+                    struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus', ...
+                    'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
+            end
             
-            %subspaceModel = fitcensemble(features,labels,'Method','Subspace','CrossVal','on','CVPartition',cvp,'OptimizeHyperparameters','all');
-            %adaboostModel = fitcensemble(features,labels,'AdaBoostM2','Subspace','CrossVal','on','CVPartition',cvp,'OptimizeHyperparameters','all');
-            %lpboostModel = fitcensemble(features,labels,'LPBoost','Subspace','CrossVal','on','CVPartition',cvp,'OptimizeHyperparameters','all');
+            t = templateTree();
+            ensemble = fitcensemble(features,labels,'OptimizeHyperparameters','all','Learners',t, ...
+                                    'HyperparameterOptimizationOptions',struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus', ...
+                                    'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
 
-            %model = fitcecoc(features,labels,'Learners','linear');
+            modelList = {svmPost,ensemble};
+            accSVM = evalCV(obj,svmPost,cvp);
+            accEnsemble = evalCV(obj,ensemble,cvp);
+            [~,idx] = max([accSVM,accEnsemble]);
+            if idx == 1
+                disp('SVM perfomed best.');
+            elseif idx == 2
+                disp('Tree ensemble performed best.');
+            end
+            model = modelList{idx};
 
+            if ~isempty(targetClass) && ~isempty(targetMetric) && ~isempty(targetValue)
+                disp('Attempting to find threshold that yields: ' ...
+                    + string(targetMetric) + '=' + string(targetValue) + ' for class ' + string(targetClass) + ' ...');
+                [~,postProbs] = resubPredict(model);
+                rocObj = rocmetrics(labels,postProbs,model.ClassNames);
+                plot(rocObj);
+                classROC = rocObj.Metrics(strcmp(rocObj.Metrics.ClassName,targetClass),:);
+    
+                if strcmp(targetMetric,'sens') || strcmp(targetMetric,'sensitivity') || strcmp(targetMetric,'Sensititvity') || strcmp(targetMetric,'TPR') || strcmp(targetMetric,'tpr')
+                    metricCol = classROC.TruePositiveRate;
+                elseif strcmp(targetMetric,'spec') || strcmp(targetMetric,'specificity') || strcmp(targetMetric,'Specificity') || strcmp(targetMetric,'TNR') || strcmp(targetMetric,'tnr')
+                    metricCol = 1 - classROC.FalsePositiveRate;
+                else
+                    error('Specified targetMetric parameter must be either sensitivity or specitivity (as a string).');
+                end
+                [~,idx] = min(abs(metricCol-targetValue));
+                decisionThresh = classROC.Threshold(idx);
+            else
+                decisionThresh = [];
+            end
+        end
+
+        function cvtrainAccuracy = evalCV(~,model,cvp)
             cvMdl = crossval(model,'CVPartition',cvp);
             cvtrainError = kfoldLoss(cvMdl);
             cvtrainAccuracy = 1-cvtrainError;
-            disp(cvtrainAccuracy);
+            disp('Mean accuracy over the 5 folds: ' + string(cvtrainAccuracy));
         end
 
         function acc = test(~,testDocs,testLabels,specs)
