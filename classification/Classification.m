@@ -40,9 +40,19 @@ classdef Classification
                 percVal = 1 - percTrain;
             end
             
-            cvp = cvpartition(data.Y,'Holdout',percVal);
-            dataTrain = data(cvp.training,:);
-            dataVal = data(cvp.test,:);
+            if percVal == 0 && percTrain == 1
+                disp('Skipping data splitting ...');
+                dataTrain = data;
+                XVal = [];
+                YVal = [];
+            else
+                cvp = cvpartition(data.Y,'Holdout',percVal);
+                dataTrain = data(cvp.training,:);
+                dataVal = data(cvp.test,:);
+
+                XVal = dataVal.X;
+                YVal = dataVal.Y;
+            end
 
             percTest = 1 - (percTrain + percVal);
             if percTest > 0
@@ -60,9 +70,7 @@ classdef Classification
 
             % Extract the text data and labels from the tables.
             XTrain = dataTrain.X;
-            XVal = dataVal.X;
             YTrain = dataTrain.Y;
-            YVal = dataVal.Y;
         end
 
         function [features,bags] = extractFeatures(obj,documents,useBERT)
@@ -113,26 +121,25 @@ classdef Classification
             idxBestFeatures = idx(1:optNumFeatures);
         end
 
-        function [model,decisionThresh] = train(obj,features,labels,targetClass,targetMetric,targetValue)
-            if nargin < 4
+        function [model,target] = train(obj,features,labels,target,maxEvals)
+            if nargin < 4 || isempty(target)
                 targetClass = [];
                 targetMetric = [];
                 targetValue = [];
-            elseif nargin < 5
-                error('Either specify no target parameter or all.');
-            elseif nargin < 6
-                error('Either specify no target parameter or all.');
             else
-                targetClass = string(targetClass);
-                targetMetric = string(targetMetric);
-                targetValue = double(targetValue);
+                targetClass = string(target.class);
+                targetMetric = string(target.metric);
+                targetValue = double(target.value);
+            end
+            if nargin < 5 || isempty(maxEvals)
+                maxEvals = 10;
             end
 
             disp("Training classifier with hyperparameter optimization ...");
             if issparse(features)
-                features = full(features); % matlabs hyperparameter optimizations bugs with sparse matrices
+                features = full(features); % matlabs hyperparameter optimization bugs with sparse matrices
             end
-            maxEvals = 10;
+
             cvp = cvpartition(labels,'KFold',5,'Stratify',true);
             classes = unique(labels);
             numClasses = length(classes);
@@ -151,8 +158,8 @@ classdef Classification
                     'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
             end
             
-            t = templateTree();
-            ensemble = fitcensemble(features,labels,'OptimizeHyperparameters','all','Learners',t, ...
+            tree = templateTree();
+            ensemble = fitcensemble(features,labels,'OptimizeHyperparameters','all','Learners',tree, ...
                                     'HyperparameterOptimizationOptions',struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus', ...
                                     'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
 
@@ -182,10 +189,19 @@ classdef Classification
                 else
                     error('Specified targetMetric parameter must be either sensitivity or specitivity (as a string).');
                 end
-                [~,idx] = min(abs(metricCol-targetValue));
-                decisionThresh = classROC.Threshold(idx);
+                diffList = abs(metricCol-targetValue);
+                [~,i1] = min(diffList);
+                diffList(i1) = Inf;
+                [~,i2] = min(diffList);
+                t1 = classROC.Threshold(i1);
+                t2 = classROC.Threshold(i2);
+                if metricCol(i1) == metricCol(i2)
+                    target.thresh = t1; % interpolation would yield Inf,-Inf,or NaN -> use the threshold that is closest to the targetValue
+                else
+                    target.thresh = Utils.interpolate(targetValue,metricCol(i1),metricCol(i2),t1,t2);
+                end
             else
-                decisionThresh = [];
+                target = [];
             end
         end
 
@@ -193,13 +209,17 @@ classdef Classification
             cvMdl = crossval(model,'CVPartition',cvp);
             cvtrainError = kfoldLoss(cvMdl);
             cvtrainAccuracy = 1-cvtrainError;
-            disp('Mean accuracy over the 5 folds: ' + string(cvtrainAccuracy));
+            disp('Mean accuracy over the CV-folds: ' + string(cvtrainAccuracy));
         end
 
-        function acc = test(~,testDocs,testLabels,specs)
+        function [YPred,stats] = predict(~,specs,testDocs,testLabels)
+            if nargin < 4
+                testLabels = [];
+            end
             bags = specs.bags;
             model = specs.model;
             idxBest = specs.idxBest;
+            target = specs.target;
 
             % testDocs = FeatureExtraction.preprocessText(XTest);
             wordCounts = encode(bags.word,testDocs);
@@ -213,9 +233,37 @@ classdef Classification
             features = [wordCounts,bigramCounts,trigramCounts,wordTFIDF,bigramTFIDF,trigramTFIDF];
             features = features(:,idxBest);
 
+            features = full(features); % from sparse to normal matrix
             % Predict the labels of the test data using the trained model and calculate the classification accuracy.
-            YPred = predict(model,features);
-            acc = sum(string(cell2mat(YPred)) == string(cell2mat(testLabels)))/numel(testLabels);
+            [YPred,postProbs] = predict(model,features);
+            if ~isempty(target)
+                col = strcmp(model.ClassNames,target.class);
+                tmpProbs = postProbs;
+                tmpProbs(:,col) = 0;
+                [~,repCol] = max(tmpProbs,[],2) ;
+                YPred = model.ClassNames(repCol);
+
+                classProbs = postProbs(:,col);
+                YPred(classProbs >= target.thresh) = {target.class};
+            end
+
+            if ~isempty(testLabels)
+                stats.acc= sum(string(cell2mat(YPred)) == string(cell2mat(testLabels)))/numel(testLabels);
+                rocObj = rocmetrics(testLabels,postProbs,model.ClassNames);
+                stats.auc = rocObj.AUC;
+                if length(model.ClassNames) == 2
+                    confmat = confusionmat(testLabels,YPred);
+                    TN = confmat(2, 2);
+                    TP = confmat(1, 1);
+                    FN = confmat(1, 2);
+                    FP = confmat(2, 1);
+                    % stats.accuracy = (TP + TN) / (TP + TN + FP + FN);
+                    stats.sens = TP / (FN + TP);
+                    stats.spec = TN / (TN + FP);
+                end
+            else
+                stats = [];
+            end
         end
 
         function net = trainLSTM(obj,trainDocs,YTrain,valDocs,YVal, ...
