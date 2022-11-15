@@ -132,7 +132,7 @@ classdef Classification
                 targetValue = double(target.value);
             end
             if nargin < 5 || isempty(maxEvals)
-                maxEvals = 10;
+                maxEvals = 100;
             end
 
             disp("Training classifier with hyperparameter optimization ...");
@@ -248,11 +248,11 @@ classdef Classification
             end
 
             if ~isempty(testLabels)
-                stats.acc= sum(string(cell2mat(YPred)) == string(cell2mat(testLabels)))/numel(testLabels);
+                stats.acc = sum(string(cell2mat(YPred)) == string(cell2mat(testLabels)))/numel(testLabels);
                 rocObj = rocmetrics(testLabels,postProbs,model.ClassNames);
                 stats.auc = rocObj.AUC;
                 if length(model.ClassNames) == 2
-                    confmat = confusionmat(testLabels,YPred);
+                    confmat = confusionmat(str2double(testLabels),str2double(YPred)); % using strings instead of numbers orders the matrix unpredictably
                     TN = confmat(2, 2);
                     TP = confmat(1, 1);
                     FN = confmat(1, 2);
@@ -264,48 +264,6 @@ classdef Classification
             else
                 stats = [];
             end
-        end
-
-        function net = trainLSTM(obj,trainDocs,YTrain,valDocs,YVal, ...
-                                 enc,sequenceLength)
-            % Most of the training documents have fewer than x tokens. Use this as your target length for truncation and padding.
-            % Convert the documents to sequences of numeric indices using doc2sequence. To truncate or left-pad the sequences to have length x, set the 'Length' option to x.
-            XTrain = doc2sequence(enc,trainDocs,'Length',sequenceLength);
-            
-            % Define the LSTM network architecture.
-            % To input sequence data into the network, include a sequence input layer and set the input size to 1.
-            % Next, include a word embedding layer of dimension 50 and the same number of words as the word encoding.
-            % Next, include an LSTM layer and set the number of hidden units to 80.
-            % To use the LSTM layer for a sequence-to-label classification problem, set the output mode to 'last'.
-            % Finally, add a fully connected layer with the same size as the number of classes, a softmax layer, and a classification layer.
-            inputSize = 1;
-            embeddingDimension = 50;
-            numHiddenUnits = 80;
-            
-            numWords = enc.NumWords;
-            numClasses = numel(categories(YTrain));
-            
-            layers = [ ...
-                sequenceInputLayer(inputSize)
-                wordEmbeddingLayer(embeddingDimension,numWords)
-                lstmLayer(numHiddenUnits,'OutputMode','last')
-                fullyConnectedLayer(numClasses)
-                softmaxLayer
-                classificationLayer];
-            
-            YValidation = YTest;
-            documentsValidation = preprocessText(textDataTest); % TODO: change to validation later
-            XValidation = doc2sequence(enc,documentsValidation,'Length',sequenceLength);
-            
-            options = trainingOptions('adam', ...
-                'MiniBatchSize',16, ...
-                'GradientThreshold',2, ...
-                'Shuffle','every-epoch', ...
-                'ValidationData',{XValidation,YValidation}, ...
-                'Plots','training-progress', ...
-                'Verbose',false);
-            
-            net = trainNetwork(XTrain,YTrain,layers,options);
         end
 
     end
