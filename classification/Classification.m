@@ -258,8 +258,17 @@ classdef Classification
                     FN = confmat(1, 2);
                     FP = confmat(2, 1);
                     % stats.accuracy = (TP + TN) / (TP + TN + FP + FN);
-                    stats.sens = TP / (FN + TP);
-                    stats.spec = TN / (TN + FP);
+                    sens = TP / (FN + TP);
+                    spec = TN / (TN + FP);
+                    if strcmp(target.class,'1')
+                        stats.sens = sens;
+                        stats.spec = spec;
+                    elseif strcmp(target.class,'2')
+                        stats.sens = spec;
+                        stats.spec = sens;
+                    else
+                        error('target.class must be either ''1'' or ''2''.');
+                    end
                 end
             else
                 stats = [];
