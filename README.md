@@ -7,4 +7,4 @@
 - documentation
 - detailed README.md
 - unit tests
-- refactor code to allow only strings or integers OR format automatically
+- refactor code to allow only strings or integers as class-labels OR format automatically
