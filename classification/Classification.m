@@ -158,48 +158,58 @@ classdef Classification
                     'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
             end
             
+            % Ensembles yield nearly binarily destributed decision
+            % probabilities and should thus not be used when using a custom
+            % descision threshold.
             tree = templateTree();
             ensemble = fitcensemble(features,labels,'OptimizeHyperparameters','all','Learners',tree, ...
                                     'HyperparameterOptimizationOptions',struct('CVPartition',cvp,'AcquisitionFunctionName','expected-improvement-plus', ...
                                     'MaxObjectiveEvaluations',maxEvals,'UseParallel',true));
 
-            modelList = {svmPost,ensemble};
             accSVM = evalCV(obj,svmPost,cvp);
             accEnsemble = evalCV(obj,ensemble,cvp);
-            [~,idx] = max([accSVM,accEnsemble]);
-            if idx == 1
-                disp('SVM perfomed best.');
-            elseif idx == 2
+            if accEnsemble > accSVM
                 disp('Tree ensemble performed best.');
+                model = ensemble;
+            else
+                disp('SVM perfomed best.');
+                model = svmPost;
             end
-            model = modelList{idx};
-
+           
             if ~isempty(targetClass) && ~isempty(targetMetric) && ~isempty(targetValue)
                 disp('Attempting to find threshold that yields: ' ...
                     + string(targetMetric) + '=' + string(targetValue) + ' for class ' + string(targetClass) + ' ...');
-                [~,postProbs] = resubPredict(model);
-                rocObj = rocmetrics(labels,postProbs,model.ClassNames);
-                plot(rocObj);
-                classROC = rocObj.Metrics(strcmp(rocObj.Metrics.ClassName,targetClass),:);
+                col = strcmp(classes,target.class);
+                decThreshs = [];
+                runs = 10;
+                for i = 1:runs
+                    partitionedModel = crossval(model,'KFold',10);
+                    if isa(model,'ClassificationSVM')
+                        partitionedModel = fitSVMPosterior(partitionedModel);
+                    end
+                    [~,postProbs] = kfoldPredict(partitionedModel);
+                    [FPR,TPR,thresholds] = perfcurve(labels,postProbs(:,col),target.class);
     
-                if strcmp(targetMetric,'sens') || strcmp(targetMetric,'sensitivity') || strcmp(targetMetric,'Sensititvity') || strcmp(targetMetric,'TPR') || strcmp(targetMetric,'tpr')
-                    metricCol = classROC.TruePositiveRate;
-                elseif strcmp(targetMetric,'spec') || strcmp(targetMetric,'specificity') || strcmp(targetMetric,'Specificity') || strcmp(targetMetric,'TNR') || strcmp(targetMetric,'tnr')
-                    metricCol = 1 - classROC.FalsePositiveRate;
-                else
-                    error('Specified targetMetric parameter must be either sensitivity or specitivity (as a string).');
+                    if strcmp(targetMetric,'sens') || strcmp(targetMetric,'sensitivity') || strcmp(targetMetric,'Sensititvity') || strcmp(targetMetric,'TPR') || strcmp(targetMetric,'tpr')
+                        metricCol = TPR;
+                    elseif strcmp(targetMetric,'spec') || strcmp(targetMetric,'specificity') || strcmp(targetMetric,'Specificity') || strcmp(targetMetric,'TNR') || strcmp(targetMetric,'tnr')
+                        metricCol = 1 - FPR;
+                    else
+                        error('Specified targetMetric parameter must be either sensitivity or specitivity (as a string).');
+                    end
+                    diffList = abs(metricCol-targetValue);
+                    [~,i1] = min(diffList);
+                    diffList(i1) = Inf;
+                    [~,i2] = min(diffList);
+                    t1 = thresholds(i1);
+                    t2 = thresholds(i2);
+                    if metricCol(i1) == metricCol(i2)
+                        decThreshs = [decThreshs,t1]; % interpolation would yield Inf,-Inf,or NaN -> use the threshold that is closest to the targetValue
+                    else
+                        decThreshs = [decThreshs,Utils.interpolate(targetValue,metricCol(i1),metricCol(i2),t1,t2)];
+                    end
                 end
-                diffList = abs(metricCol-targetValue);
-                [~,i1] = min(diffList);
-                diffList(i1) = Inf;
-                [~,i2] = min(diffList);
-                t1 = classROC.Threshold(i1);
-                t2 = classROC.Threshold(i2);
-                if metricCol(i1) == metricCol(i2)
-                    target.thresh = t1; % interpolation would yield Inf,-Inf,or NaN -> use the threshold that is closest to the targetValue
-                else
-                    target.thresh = Utils.interpolate(targetValue,metricCol(i1),metricCol(i2),t1,t2);
-                end
+                target.thresh = median(decThreshs);
             else
                 target = [];
             end
@@ -236,8 +246,8 @@ classdef Classification
             features = full(features); % from sparse to normal matrix
             % Predict the labels of the test data using the trained model and calculate the classification accuracy.
             [YPred,postProbs] = predict(model,features);
-            if ~isempty(target)
-                col = strcmp(model.ClassNames,target.class);
+            col = strcmp(model.ClassNames,target.class);
+            if isfield(target,'thresh') && ~isempty(target.thresh)
                 tmpProbs = postProbs;
                 tmpProbs(:,col) = 0;
                 [~,repCol] = max(tmpProbs,[],2) ;
@@ -249,8 +259,9 @@ classdef Classification
 
             if ~isempty(testLabels)
                 stats.acc = sum(string(cell2mat(YPred)) == string(cell2mat(testLabels)))/numel(testLabels);
-                rocObj = rocmetrics(testLabels,postProbs,model.ClassNames);
-                stats.auc = rocObj.AUC;
+                if ~isempty(target.class)
+                    [~,~,~,stats.auc] = perfcurve(testLabels,postProbs(:,col),target.class);
+                end
                 if length(model.ClassNames) == 2
                     confmat = confusionmat(str2double(testLabels),str2double(YPred)); % using strings instead of numbers orders the matrix unpredictably
                     TN = confmat(2, 2);
